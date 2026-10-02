@@ -1,0 +1,16 @@
+Executable         = script.sh
+Universe           = vanilla
+notification       = Never
+Input              = /dev/null
+Arguments          = $(isMC) $(sim) $(filename) $(trigger) $(process)
+Initialdir         = /sphenix/user/samfred/projects/multiJet/FunforAll
+Output             = $(Initialdir)/log/$(process).out
+Error              = $(Initialdir)/log/$(process).err
+Log                = /tmp/samfred_$(process).log
+#request_memory     = 4096MB
+#max_materialize    = 7000 in case im eating too much memory
+
+# process is HTCondor's automatic per-job index, not a queue.list column -
+# only these 4 fields are actually read from the file, same as the old
+# condor.job/MCcondor.job did with just "filename" / "sim, filename, trigger".
+Queue isMC, sim, filename, trigger from queue.list

@@ -1,0 +1,13 @@
+Executable         = MCscript.sh
+Universe           = vanilla
+notification       = Never
+Input              = /dev/null
+Arguments          = $(sim) $(filename) $(trigger) $(process)
+Initialdir         = /sphenix/user/samfred/projects/multiJet/FunforAll
+Output             = $(Initialdir)/MClog/$(process).out
+Error              = $(Initialdir)/MClog/$(process).err
+Log                = /tmp/samfred_MC$(process).log
+#request_memory     = 4096MB
+#max_materialize    = 10000
+
+Queue sim, filename, trigger from MCqueue.list

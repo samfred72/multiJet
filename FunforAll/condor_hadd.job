@@ -1,0 +1,12 @@
+Executable         = script_hadd.sh
+Universe           = vanilla
+notification       = Never
+Input              = /dev/null
+Arguments          = $(isMC) $(sim) $(runnumber) $(trigger)
+Initialdir         = /sphenix/user/samfred/projects/multiJet/FunforAll
+Output             = $(Initialdir)/log/$(process).out
+Error              = $(Initialdir)/log/$(process).err
+Log                = /tmp/samfred_$(process).log
+#request_memory     = 4096MB
+
+Queue isMC, sim, runnumber, trigger from hadd_queue.list
