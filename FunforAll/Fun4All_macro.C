@@ -310,13 +310,10 @@ void Fun4All_macro(const char* infile="/sphenix/user/samfred/projects/filelists/
       jetCalib->set_InputNode(Form("AntiKt_TowerInfo_r0%i",(int)(doUnsubJet_radius[ir]*10)));
       jetCalib->set_OutputNode(Form("AntiKt_TowerInfo_r0%i_calib",(int)(doUnsubJet_radius[ir]*10)));
       jetCalib->set_JetRadius(doUnsubJet_radius[ir]);
-      // set_ZvrtxNode() does not exist in the current JetCalib API (vertex
-      // lookup is internal now); set_ApplyZvrtxDependentCalib/EtaDependentCalib
-      // only take effect under the legacy method - see JetCalib.h and
-      // gammajet/treemaking/macros/MCFun4All_macro.C's jetCalibOld block.
-      jetCalib->set_UseEMfracCalib(false);
-      jetCalib->set_ApplyZvrtxDependentCalib(true);
-      jetCalib->set_ApplyEtaDependentCalib(true);
+      // EMfrac JES (JetCalib default; CDB payload JES_Calibration_EMfrac) plus the
+      // z-vertex + eta residual correction, as recommended by the JES authors (Oct 2026).
+      // Replaces the legacy method (set_UseEMfracCalib(false) with the z-vertex/eta TF1s).
+      jetCalib->set_ApplyResidualCalib(true);  // z-vertex + eta residual correction
       se->registerSubsystem(jetCalib);
     }
 
