@@ -763,7 +763,6 @@
 51300
 51301
 51334
-51335
 51336
 51337
 51338
@@ -1040,7 +1039,6 @@
 52461
 52462
 52463
-52466
 52467
 52468
 52469
@@ -1486,7 +1484,6 @@
 53681
 53685
 53686
-53705
 53706
 53707
 53708
@@ -1566,12 +1563,14 @@
 53861
 53862
 53864
-# MC samples: <sim> <trigger> - herwig limited to Jet12/20/30 (no herwig Jet8/50/60/70 master queue list exists)
+# MC samples: <sim> <trigger> - herwig limited to Jet5/12/20/30 (no herwig Jet8/50/60/70 master queue list exists)
+pythia Jet5
 pythia Jet8
 pythia Jet12
 pythia Jet20
 pythia Jet30
 pythia Jet50
+herwig Jet5
 herwig Jet12
 herwig Jet20
 herwig Jet30

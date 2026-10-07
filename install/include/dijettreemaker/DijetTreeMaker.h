@@ -40,7 +40,7 @@
 #include <jetbase/Jetv2.h>
 
 #include "TTree.h"
-#include "TRandom.h"
+#include "TRandom3.h"
 #include "TFile.h"
 #include "TH1.h"
 #include "TVector3.h"
@@ -105,8 +105,13 @@ class DijetTreeMaker : public SubsysReco
   // to pt_calib when unmatched (matches gammajet/treemaking/src/CaloAna.cc's
   // smear_pt() fix - see its comment there for why the fallback matters: without
   // it, unmatched jets got zero smearing instead of a reasonable one).
-  // sign: 0 = nominal, +1 = high, -1 = low.
-  Double_t smear_pt(float pt_calib, int ijet, const std::vector<std::pair<int,float>> &matched_jets, int sign);
+  // z is the jet's standard-normal deviate (shared by every variation); pt_ref is the
+  // matched truth pt, or pt_calib when unmatched. sign: 0 = nominal, +1 = high, -1 = low.
+  Double_t smear_pt(float pt_calib, float pt_ref, float z, int sign);
+  // Seed for this event's smearing: run and event number, plus the truth vertex in MC
+  // (MC event numbers restart in every DST segment). The same event always gets the same
+  // smearing; different events and jobs get independent ones.
+  UInt_t eventSeed(PHCompositeNode *topNode);
   Double_t DeltaR(float x1, float x2, float y1, float y2);
   void saveCalo(bool save){save_calo = save;}
   void isAuAu(bool auau){m_is_auau = auau;}
@@ -170,7 +175,11 @@ class DijetTreeMaker : public SubsysReco
   // vector for that cone (pt, calib pt, smear variants, kinematics, etc.),
   // all reordered/truncated together so they stay index-aligned. Called
   // once at the end of process_jets(), only when m_skim is set.
-  void keepLeadingJets(int cone_index, size_t n_keep = 3);
+  // A jet is kept if it is in the top n_keep of ANY pt flavor (calib or one of
+  // the six JER smears), so a jet that only becomes leading after smearing survives.
+  void keepLeadingJets(int cone_index, size_t n_keep = 4);
+  // pt vectors of every flavor for a cone: calib, then (MC) the six JER smears
+  std::vector<std::vector<float>*> ptFlavors(int cone_index);
 
   // --- combined single-pass "offline skim" selection ---
   // Mirrors multiJet's old skimmer/makeSkimmedTrees.C::check_dijet_reco, run
@@ -178,9 +187,17 @@ class DijetTreeMaker : public SubsysReco
   // module already fills, OR'd across radii, exactly like that macro's
   // per-radius anypass loop. See DijetTreeMaker::passesOfflineSkimCuts().
   bool m_apply_skim_cuts{false};
-  static constexpr float m_skim_leading_pt_cut = 20.;    // makeSkimmedTrees.C leading_cut
+  // Skim thresholds sit below the analysis cuts (leading 20, jets 2 and 3 at 7 GeV), so the
+  // analysis can re-smear or tighten without reprocessing.
+  static constexpr float m_skim_leading_pt_cut = 15.;
+  static constexpr float m_skim_subjet_pt_cut = 5.;
   static constexpr float m_skim_dphicut_loose = TMath::Pi() / 2.;  // makeSkimmedTrees.C dphicutloose
   static constexpr float m_skim_vertex_cut = 60.;         // makeSkimmedTrees.C vertex_cut
+  // Data skim thresholds are multiplied by the lowest in-situ JES (p_a) the scans
+  // try, so events that pass after jet_pt/p_a are kept (as unfolder.cc does).
+  static constexpr float m_skim_jes_floor = 0.9;
+  // Jets are stored if the raw pt >= pt_cut or any pt flavor >= this
+  float m_store_pt_cut = 4;
   bool passesOfflineSkimCuts();
 
   bool m_allevents = false;
@@ -339,6 +356,12 @@ class DijetTreeMaker : public SubsysReco
   std::vector<std::vector<float>*> b_jet_pt_smear_truth;
   std::vector<std::vector<float>*> b_jet_pt_smear_high_truth;
   std::vector<std::vector<float>*> b_jet_pt_smear_low_truth;
+  // MC: the jet's standard-normal smearing deviate (every smeared variation is
+  // pt_calib + z * pt_ref * width_variation(pt_ref)), and the matched truth jet pt (-1 if none)
+  std::vector<std::vector<float>*> b_jet_smear_z;
+  std::vector<std::vector<float>*> b_jet_truth_pt;
+  // MC: one standard-normal deviate per event and radius, for smearing a summed recoil
+  float b_recoil_smear_z[16] = {0};
   std::vector<std::vector<float>*> b_jet_et;
   std::vector<std::vector<float>*> b_jet_t;
   std::vector<std::vector<float>*> b_jet_e;
@@ -419,7 +442,7 @@ class DijetTreeMaker : public SubsysReco
   double b_pileup{0};
 
   //smearing parameters
-  TRandom rand;
+  TRandom3 rand;
   // JER smearing templates (fractional resolution vs pt), ported from
   // gammajet/treemaking/src/CaloAna.cc. That file only has templates derived
   // for r04 (jerband_smearing_templates.root has no other radius); by

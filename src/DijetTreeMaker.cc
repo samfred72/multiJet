@@ -48,6 +48,9 @@
 #include <phool/PHNodeIterator.h>
 #include <phool/PHObject.h>
 #include <phool/getClass.h>
+#include <ffaobjects/EventHeader.h>
+#include <cstring>
+#include <cstdint>
 // G4Cells includes
 
 #include <iostream>
@@ -314,6 +317,8 @@ int DijetTreeMaker::Init(PHCompositeNode *topNode)
     b_jet_pt_smear_truth.push_back(new std::vector<float>());
     b_jet_pt_smear_high_truth.push_back(new std::vector<float>());
     b_jet_pt_smear_low_truth.push_back(new std::vector<float>());
+    b_jet_smear_z.push_back(new std::vector<float>());
+    b_jet_truth_pt.push_back(new std::vector<float>());
     b_jet_et.push_back(new std::vector<float>());
     b_jet_t.push_back(new std::vector<float>());
     b_jet_e.push_back(new std::vector<float>());
@@ -363,6 +368,12 @@ int DijetTreeMaker::Init(PHCompositeNode *topNode)
         _tree->Branch(Form("jet_pt_smear_truth_%d%s", cone, (bkg?"_sub":"")), b_jet_pt_smear_truth.at(coneindex));
         _tree->Branch(Form("jet_pt_smear_high_truth_%d%s", cone, (bkg?"_sub":"")), b_jet_pt_smear_high_truth.at(coneindex));
         _tree->Branch(Form("jet_pt_smear_low_truth_%d%s", cone, (bkg?"_sub":"")), b_jet_pt_smear_low_truth.at(coneindex));
+      }
+      if (isSim && !bkg)
+      {
+        _tree->Branch(Form("jet_smear_z_%d", cone), b_jet_smear_z.at(coneindex));
+        _tree->Branch(Form("jet_truth_pt_%d", cone), b_jet_truth_pt.at(coneindex));
+        _tree->Branch(Form("recoil_smear_z_%d", cone), &b_recoil_smear_z[coneindex], Form("recoil_smear_z_%d/F", cone));
       }
     }
     _tree->Branch(Form("jet_t_%d%s", cone, (bkg?"_sub":"")), b_jet_t.at(coneindex));
@@ -491,6 +502,9 @@ void DijetTreeMaker::reset_tree_vars()
     b_jet_pt_smear_truth.at(i)->clear();
     b_jet_pt_smear_high_truth.at(i)->clear();
     b_jet_pt_smear_low_truth.at(i)->clear();
+    b_jet_smear_z.at(i)->clear();
+    b_jet_truth_pt.at(i)->clear();
+    b_recoil_smear_z[i] = 0;
     b_jet_et.at(i)->clear();
     b_jet_t.at(i)->clear();
     b_jet_e.at(i)->clear();
@@ -584,11 +598,24 @@ void DijetTreeMaker::reset_tree_vars()
 }
 
 //____________________________________________________________________________..
-// Keeps only the top n_keep jets (by calibrated pt, falling back to raw pt
-// if calibration wasn't applied for this cone) for the given cone_index -
-// indices 0/1/2 after this call are leading/subleading/subsubleading.
-// Every per-jet vector for that cone is reordered/truncated together so
-// they stay index-aligned with each other.
+std::vector<std::vector<float>*> DijetTreeMaker::ptFlavors(int cone_index)
+{
+  std::vector<std::vector<float>*> flavors = {b_jet_pt_calib.at(cone_index)};
+  if (isSim)
+  {
+    for (auto *v : {b_jet_pt_smear_reco.at(cone_index), b_jet_pt_smear_high_reco.at(cone_index), b_jet_pt_smear_low_reco.at(cone_index),
+                    b_jet_pt_smear_truth.at(cone_index), b_jet_pt_smear_high_truth.at(cone_index), b_jet_pt_smear_low_truth.at(cone_index)})
+    {
+      flavors.push_back(v);
+    }
+  }
+  return flavors;
+}
+
+// Keeps, for the given cone_index, every jet that is in the top n_keep of any
+// pt flavor (calib or a JER smear; raw pt if calibration wasn't applied),
+// ordered by calibrated pt. Every per-jet vector for that cone is
+// reordered/truncated together so they stay index-aligned with each other.
 void DijetTreeMaker::keepLeadingJets(int cone_index, size_t n_keep)
 {
   std::vector<float> *pt = b_jet_pt.at(cone_index);
@@ -597,14 +624,22 @@ void DijetTreeMaker::keepLeadingJets(int cone_index, size_t n_keep)
 
   std::vector<float> *rankPt = (b_jet_pt_calib.at(cone_index)->size() == n) ? b_jet_pt_calib.at(cone_index) : pt;
 
-  std::vector<size_t> order(n);
-  for (size_t k = 0; k < n; k++) order[k] = k;
+  std::vector<bool> keep(n, false);
+  std::vector<std::vector<float>*> flavors = ptFlavors(cone_index);
+  flavors.push_back(rankPt);
+  for (auto *v : flavors)
+  {
+    if (!v || v->size() != n) continue;
+    std::vector<size_t> byFlavor(n);
+    for (size_t k = 0; k < n; k++) byFlavor[k] = k;
+    std::sort(byFlavor.begin(), byFlavor.end(), [&](size_t a, size_t b) { return v->at(a) > v->at(b); });
+    for (size_t k = 0; k < std::min(n_keep, n); k++) keep[byFlavor[k]] = true;
+  }
+
+  // FastJet's ordering isn't pt-sorted, so sort the kept jets even when nothing is dropped
+  std::vector<size_t> order;
+  for (size_t k = 0; k < n; k++) if (keep[k]) order.push_back(k);
   std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return rankPt->at(a) > rankPt->at(b); });
-  // Even when n <= n_keep there's nothing to truncate, but the sort above
-  // still has to run and be applied below: FastJet's own cluster-sequence
-  // ordering isn't pt-sorted, so without this pass index 0/1/2 wouldn't
-  // reliably be leading/subleading/subsubleading.
-  if (order.size() > n_keep) order.resize(n_keep);
 
   auto reorder = [&order, n](std::vector<float> *v)
   {
@@ -623,6 +658,8 @@ void DijetTreeMaker::keepLeadingJets(int cone_index, size_t n_keep)
   reorder(b_jet_pt_smear_truth.at(cone_index));
   reorder(b_jet_pt_smear_high_truth.at(cone_index));
   reorder(b_jet_pt_smear_low_truth.at(cone_index));
+  reorder(b_jet_smear_z.at(cone_index));
+  reorder(b_jet_truth_pt.at(cone_index));
   reorder(b_jet_et.at(cone_index));
   reorder(b_jet_t.at(cone_index));
   reorder(b_jet_e.at(cone_index));
@@ -679,6 +716,12 @@ bool DijetTreeMaker::passesOfflineSkimCuts()
     return false;
   }
 
+  // MC: the event passes if any pt flavor passes (the analysis cuts on the smeared pt).
+  // Data: calib only, with thresholds lowered so the in-situ JES scans can go down to p_a = m_skim_jes_floor.
+  const float jesScale = isSim ? 1.f : m_skim_jes_floor;
+  const float leadCut = m_skim_leading_pt_cut * jesScale;
+  const float subCut = m_skim_subjet_pt_cut * jesScale;
+
   struct SkimJet
   {
     float pt, eta, phi, t;
@@ -690,48 +733,52 @@ bool DijetTreeMaker::passesOfflineSkimCuts()
     int bkg = cone_size.second.second;
     if (bkg != 0) continue;  // makeSkimmedTrees.C only ever looked at the unsub jet_* branches
 
-    std::vector<SkimJet> jets;
-    jets.reserve(b_jet_pt_calib.at(coneindex)->size());
-    for (size_t j = 0; j < b_jet_pt_calib.at(coneindex)->size(); j++)
+    for (auto *ptv : ptFlavors(coneindex))
     {
-      float pt = b_jet_pt_calib.at(coneindex)->at(j);
-      if (pt < pt_cutCalib) continue;  // makeSkimmedTrees.C calib_cut prefilter
-      SkimJet sj;
-      sj.pt = pt;
-      sj.eta = b_jet_eta.at(coneindex)->at(j);
-      sj.phi = b_jet_phi.at(coneindex)->at(j);
-      sj.t = isSim ? 0.f : b_jet_t.at(coneindex)->at(j);  // makeSkimmedTrees.C: isMC ? 0 : jet_t
-      jets.push_back(sj);
+      if (!ptv || ptv->size() != b_jet_pt_calib.at(coneindex)->size()) continue;
+      std::vector<SkimJet> jets;
+      jets.reserve(ptv->size());
+      for (size_t j = 0; j < ptv->size(); j++)
+      {
+        float pt = ptv->at(j);
+        if (pt < subCut) continue;  // makeSkimmedTrees.C calib_cut prefilter
+        SkimJet sj;
+        sj.pt = pt;
+        sj.eta = b_jet_eta.at(coneindex)->at(j);
+        sj.phi = b_jet_phi.at(coneindex)->at(j);
+        sj.t = isSim ? 0.f : b_jet_t.at(coneindex)->at(j);  // makeSkimmedTrees.C: isMC ? 0 : jet_t
+        jets.push_back(sj);
+      }
+
+      if (jets.size() < 3) continue;
+
+      std::sort(jets.begin(), jets.end(), [](const SkimJet &a, const SkimJet &b) { return a.pt > b.pt; });
+
+      const SkimJet &leading = jets.at(0);
+      const SkimJet &subleading = jets.at(1);
+      const SkimJet &subsubleading = jets.at(2);
+
+      float dphir = getDPHI(leading.phi, subleading.phi);
+      float dphirr = getDPHI(leading.phi, subsubleading.phi);
+
+      if (!(leading.pt >= leadCut &&
+            subleading.pt >= subCut &&
+            subsubleading.pt >= subCut &&
+            dphir >= dphicut &&
+            dphirr >= m_skim_dphicut_loose))
+      {
+        continue;
+      }
+
+      double jetdeltatime = 17.6 * (leading.t - subleading.t);
+      double jetleadtime = 17.6 * (leading.t);
+      bool passleadtime = (TMath::Abs(jetleadtime + 2.0) < 6.0);
+      bool passdijettime = (TMath::Abs(jetdeltatime) < 3.0);
+
+      if (!(passleadtime && passdijettime)) continue;
+
+      return true;  // matches makeSkimmedTrees.C: anypass = true; break;
     }
-
-    if (jets.size() < 3) continue;
-
-    std::sort(jets.begin(), jets.end(), [](const SkimJet &a, const SkimJet &b) { return a.pt > b.pt; });
-
-    const SkimJet &leading = jets.at(0);
-    const SkimJet &subleading = jets.at(1);
-    const SkimJet &subsubleading = jets.at(2);
-
-    float dphir = getDPHI(leading.phi, subleading.phi);
-    float dphirr = getDPHI(leading.phi, subsubleading.phi);
-
-    if (!(leading.pt >= m_skim_leading_pt_cut &&
-          subleading.pt >= pt_cutCalib &&
-          subsubleading.pt >= pt_cutCalib &&
-          dphir >= dphicut &&
-          dphirr >= m_skim_dphicut_loose))
-    {
-      continue;
-    }
-
-    double jetdeltatime = 17.6 * (leading.t - subleading.t);
-    double jetleadtime = 17.6 * (leading.t);
-    bool passleadtime = (TMath::Abs(jetleadtime + 2.0) < 6.0);
-    bool passdijettime = (TMath::Abs(jetdeltatime) < 3.0);
-
-    if (!(passleadtime && passdijettime)) continue;
-
-    return true;  // matches makeSkimmedTrees.C: anypass = true; break;
   }
 
   return false;
@@ -1043,6 +1090,7 @@ int DijetTreeMaker::process_event(PHCompositeNode *topNode)
     }      
   }
 
+  rand.SetSeed(eventSeed(topNode));
   for (int i = 0; i < m_n_reco_cone_sizes; i++)
   {
     dijet_candidate |= process_jets(i, topNode);
@@ -1627,7 +1675,7 @@ int DijetTreeMaker::process_jets(int cone_index, PHCompositeNode* topNode)
         Jet *jet_r = jets_calib->get_jet(ireco);
         
         int itruth = 0;
-        if (jet_r->get_pt() < pt_cutCalib) {ireco++; continue; }
+        if (jet_r->get_pt() < m_store_pt_cut) {ireco++; continue; }
         for (auto jet_t : *truthjets) {
           if (jet_t->get_pt() < 5) {itruth++; continue; }
           Pair temp;
@@ -1688,17 +1736,23 @@ int DijetTreeMaker::process_jets(int cone_index, PHCompositeNode* topNode)
         calibpt = jet_calib->get_pt();
       }
 
+      // One standard-normal deviate per jet, shared by every smeared variation, so the
+      // high/low variations are fully correlated with the nominal one.
+      const float smearZ = isSim ? rand.Gaus(0, 1) : 0;
+      float truthpt = -1;
+      for (const auto &m : matched_jets) if (m.first == ijet) { truthpt = m.second; break; }
       // "_reco": mean and width both from the calibrated reco jet (matches
       // CaloAna.cc's pt_smear_reco/pt_smear_high_reco/pt_smear_low_reco).
-      float smearpT_reco       = rand.Gaus(calibpt, calibpt * h_jer_smear_nominal->Interpolate(calibpt));
-      float smearpT_high_reco  = rand.Gaus(calibpt, calibpt * h_jer_smear_up->Interpolate(calibpt));
-      float smearpT_low_reco   = rand.Gaus(calibpt, calibpt * h_jer_smear_down->Interpolate(calibpt));
+      float smearpT_reco       = smear_pt(calibpt, calibpt, smearZ,  0);
+      float smearpT_high_reco  = smear_pt(calibpt, calibpt, smearZ, +1);
+      float smearpT_low_reco   = smear_pt(calibpt, calibpt, smearZ, -1);
       // "_truth": reco mean, but the resolution width is looked up at the
       // matched truth jet's pt (falls back to calibpt if unmatched) - see
       // smear_pt()'s header comment.
-      float smearpT_truth      = smear_pt(calibpt, ijet, matched_jets,  0);
-      float smearpT_high_truth = smear_pt(calibpt, ijet, matched_jets, +1);
-      float smearpT_low_truth  = smear_pt(calibpt, ijet, matched_jets, -1);
+      const float ptref = truthpt > 0 ? truthpt : calibpt;
+      float smearpT_truth      = smear_pt(calibpt, ptref, smearZ,  0);
+      float smearpT_high_truth = smear_pt(calibpt, ptref, smearZ, +1);
+      float smearpT_low_truth  = smear_pt(calibpt, ptref, smearZ, -1);
 
       if (!isSim) {
         smearpT_reco       = calibpt;
@@ -1710,9 +1764,9 @@ int DijetTreeMaker::process_jets(int cone_index, PHCompositeNode* topNode)
       }
 
       ijet++;
-      if (jet->get_pt() < pt_cut && calibpt < pt_cutCalib &&
-          smearpT_reco < pt_cutCalib && smearpT_high_reco < pt_cutCalib && smearpT_low_reco < pt_cutCalib &&
-          smearpT_truth < pt_cutCalib && smearpT_high_truth < pt_cutCalib && smearpT_low_truth < pt_cutCalib){
+      if (jet->get_pt() < pt_cut && calibpt < m_store_pt_cut &&
+          smearpT_reco < m_store_pt_cut && smearpT_high_reco < m_store_pt_cut && smearpT_low_reco < m_store_pt_cut &&
+          smearpT_truth < m_store_pt_cut && smearpT_high_truth < m_store_pt_cut && smearpT_low_truth < m_store_pt_cut){
         continue;
       }
       //if (jet->get_pt() < 3) std::cout << cone_size << " " << jet->get_pt() << "*******************************" << std::endl;
@@ -2064,6 +2118,8 @@ int DijetTreeMaker::process_jets(int cone_index, PHCompositeNode* topNode)
         b_jet_pt_smear_truth.at(cone_index)->push_back(smearpT_truth);
         b_jet_pt_smear_high_truth.at(cone_index)->push_back(smearpT_high_truth);
         b_jet_pt_smear_low_truth.at(cone_index)->push_back(smearpT_low_truth);
+        b_jet_smear_z.at(cone_index)->push_back(smearZ);
+        b_jet_truth_pt.at(cone_index)->push_back(truthpt);
       }
       b_jet_eta.at(cone_index)->push_back(jet->get_eta());
       b_jet_eta_det.at(cone_index)->push_back(det_eta);
@@ -2172,6 +2228,8 @@ int DijetTreeMaker::process_jets(int cone_index, PHCompositeNode* topNode)
         b_jet_pt_smear_truth.at(cone_index)->clear();
         b_jet_pt_smear_high_truth.at(cone_index)->clear();
         b_jet_pt_smear_low_truth.at(cone_index)->clear();
+        b_jet_smear_z.at(cone_index)->clear();
+        b_jet_truth_pt.at(cone_index)->clear();
       }
       b_jet_eta.at(cone_index)->clear();//(jet->get_eta());
       b_jet_eta_det.at(cone_index)->clear();//(det_eta);
@@ -2213,6 +2271,7 @@ int DijetTreeMaker::process_jets(int cone_index, PHCompositeNode* topNode)
     max_secondmax_phi[im]=0;
   }
 
+  if (isSim && !isbkg) b_recoil_smear_z[cone_index] = rand.Gaus(0, 1);
   if (m_skim) keepLeadingJets(cone_index);
 
   return (dijet_candidate ? 1 : 0);
@@ -2311,23 +2370,37 @@ Double_t DijetTreeMaker::getDPHI(Double_t phi1, Double_t phi2) {
 
 }
 
-Double_t DijetTreeMaker::smear_pt(float pt_calib, int ijet, const std::vector<std::pair<int,float>> &matched_jets, int sign) {
-  bool matched = false;
-  float truthval = 0;
-  for (size_t i = 0; i < matched_jets.size(); i++) {
-    if (matched_jets[i].first == ijet) {
-      truthval = matched_jets[i].second;
-      matched = true;
-      break;
+Double_t DijetTreeMaker::smear_pt(float pt_calib, float pt_ref, float z, int sign) {
+  // Unmatched jets use pt_calib as the resolution-lookup reference (the caller passes it as
+  // pt_ref) instead of getting no smearing - ported from
+  // gammajet/treemaking/src/CaloAna.cc::smear_pt(), see its comment there.
+  const TH1D *h_width = (sign > 0) ? h_jer_smear_up : (sign < 0) ? h_jer_smear_down : h_jer_smear_nominal;
+  return pt_calib + z * pt_ref * h_width->Interpolate(pt_ref);
+}
+
+UInt_t DijetTreeMaker::eventSeed(PHCompositeNode *topNode) {
+  uint64_t h = 0x9E3779B97F4A7C15ULL;
+  auto mix = [&h](uint64_t v) {
+    h ^= v + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
+    h *= 0xBF58476D1CE4E5B9ULL;
+    h ^= h >> 31;
+  };
+  if (EventHeader *evthdr = findNode::getClass<EventHeader>(topNode, "EventHeader"))
+  {
+    mix(static_cast<uint64_t>(evthdr->get_RunNumber()));
+    mix(static_cast<uint64_t>(evthdr->get_EvtSequence()));
+  }
+  if (isSim)
+  {
+    for (float v : {b_truth_vertex_x, b_truth_vertex_y, b_truth_vertex_z})
+    {
+      uint32_t bits;
+      std::memcpy(&bits, &v, sizeof(bits));
+      mix(bits);
     }
   }
-  // Unmatched jets fall back to pt_calib as the resolution-lookup reference
-  // instead of leaving them with zero smearing - ported from
-  // gammajet/treemaking/src/CaloAna.cc::smear_pt(), see its comment there.
-  float pt_ref = matched ? truthval : pt_calib;
-  const TH1D *h_width = (sign > 0) ? h_jer_smear_up : (sign < 0) ? h_jer_smear_down : h_jer_smear_nominal;
-  float width = h_width->Interpolate(pt_ref);
-  return rand.Gaus(pt_calib, pt_ref*width);
+  const UInt_t seed = static_cast<UInt_t>(h ^ (h >> 32));
+  return seed ? seed : 1;  // TRandom3::SetSeed(0) would pick a random seed
 }
 Double_t DijetTreeMaker::DeltaR(float x1, float y1, float x2, float y2) {
   float deta = std::abs(x1-x2);

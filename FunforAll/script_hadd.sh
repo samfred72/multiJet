@@ -17,7 +17,7 @@ RUNNUMBER=$3
 TRIGGER=$4
 
 if [[ $ISMC == 1 ]]; then
-  hadd -f /sphenix/tg/tg01/jets/samfred/multiJet_hadded/multijet_${SIM}_${TRIGGER}.root /sphenix/tg/tg01/jets/samfred/multiJet_MC/*${SIM}_${TRIGGER}.root
+  hadd -f /sphenix/tg/tg01/jets/samfred/multiJet_full_hadded/multijet_${SIM}_${TRIGGER}.root /sphenix/tg/tg01/jets/samfred/multiJet_MC/*${SIM}_${TRIGGER}.root
 else
   hadd -f /sphenix/tg/tg01/jets/samfred/multiJet_hadded/multijet_${RUNNUMBER}.root /sphenix/tg/tg01/jets/samfred/multiJet/*${RUNNUMBER}*
 fi
